@@ -166,6 +166,27 @@ https://raghav-gupta-16968455824.us-central1.run.app
 * You should see: `Hello from Cloud Run! System check complete.`
 
 ---
+## Task 5: Extended Flask Endpoint (/analyze)
+
+The `/analyze` endpoint returns dynamic system metrics as JSON:
+
+**Example JSON response:**
+```json
+{
+  "timestamp": "2026-02-09T05:30:12Z",
+  "uptime_seconds": 3600,
+  "cpu_metric": 23.5,
+  "memory_metric": 512,
+  "health_score": 85,
+  "message": "All systems normal"
+}
+```
+## Testing
+
+1. Run Flask app locally to verify endpoints.
+2. Build Docker image and test container locally.
+3. Deploy to Cloud Run.
+4. Verify `/` and `/analyze` endpoints using curl or browser.
 
 ## Deliverables
 
