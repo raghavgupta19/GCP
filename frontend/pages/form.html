@@ -1,18 +1,22 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="UTF-8">
   <title>Form</title>
   <link rel="stylesheet" href="../assets/style.css">
 </head>
 <body>
-  <h2>Submit Data</h2>
-
-  <form id="dataForm">
-    <input name="name" placeholder="Name" required />
-    <input name="email" placeholder="Email" required />
-    <button type="submit">Submit</button>
-  </form>
-
+  <div class="container">
+    <div class="card">
+      <h2>Submit Your Data</h2>
+      <form id="dataForm">
+        <input type="text" name="name" placeholder="Name" required>
+        <input type="email" name="email" placeholder="Email" required>
+        <textarea name="message" placeholder="Message" required></textarea>
+        <button type="submit">Submit</button>
+      </form>
+    </div>
+  </div>
   <script src="../assets/app.js"></script>
 </body>
 </html>
