@@ -157,6 +157,16 @@ curl https://hello-cloud-run-16968455824.us-central1.run.app
 
 ---
 
+* Open the Live URL in a browser for a demo:
+
+```
+https://raghav-gupta-16968455824.us-central1.run.app
+```
+
+* You should see: `Hello from Cloud Run! System check complete.`
+
+---
+
 ## Deliverables
 
 1. `sys_check.sh` — Linux system check script
