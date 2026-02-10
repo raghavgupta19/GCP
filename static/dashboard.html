@@ -57,13 +57,28 @@
       font-weight: 500;
     }
 
+    /* 🔔 Health indicator */
+    .health-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
     .health {
       font-size: 24px;
       font-weight: 700;
     }
 
+    .indicator {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      box-shadow: 0 0 10px currentColor;
+    }
+
     .Healthy { color: #22c55e; }
     .Warning { color: #facc15; }
+    .Alert   { color: #fb923c; }
     .Critical { color: #ef4444; }
 
     canvas {
@@ -87,10 +102,15 @@
   <!-- Health -->
   <div class="card">
     <h3>Health Status</h3>
-    <div id="health" class="health">Loading…</div>
+
+    <div class="health-row">
+      <div id="indicator" class="indicator"></div>
+      <div id="health" class="health">Loading…</div>
+    </div>
+
     <div class="metric"><span>Score</span><span id="healthScore" class="value">-</span></div>
     <div class="metric"><span>Uptime</span><span id="uptime" class="value">-</span></div>
-    <div class="metric"><span>Timestamp</span><span id="timestamp" class="value">-</span></div>
+    <div class="metric"><span>Last Updated (IST)</span><span id="timestamp" class="value">-</span></div>
   </div>
 
   <!-- Process -->
@@ -102,19 +122,19 @@
     <div class="metric"><span>RSS Memory</span><span id="rss" class="value">-</span></div>
   </div>
 
-  <!-- CPU Percent (Zoomed) -->
+  <!-- CPU Percent -->
   <div class="card">
-    <h3>CPU Usage (%) – Zoomed</h3>
+    <h3>CPU Usage (%)</h3>
     <canvas id="cpuChart"></canvas>
   </div>
 
-  <!-- CPU Time Breakdown -->
+  <!-- CPU Time -->
   <div class="card">
     <h3>CPU Time Breakdown (seconds)</h3>
     <canvas id="cpuTimeChart"></canvas>
   </div>
 
-  <!-- Memory Chart -->
+  <!-- Memory -->
   <div class="card">
     <h3>Memory Usage (%)</h3>
     <canvas id="memoryChart"></canvas>
@@ -132,7 +152,7 @@
 </div>
 
 <footer>
-  Auto-refresh every 5 seconds · Metrics from Linux kernel (/proc)
+  Auto-refresh every 5 seconds · Cloud Run Linux metrics
 </footer>
 
 <script>
@@ -140,10 +160,10 @@
   const cpuData = [];
   const memData = [];
 
-  const cpuChart = new Chart(document.getElementById("cpuChart"), {
+  const cpuChart = new Chart(cpuChartEl = document.getElementById("cpuChart"), {
     type: "line",
     data: { labels, datasets: [{ label: "CPU %", data: cpuData, borderColor: "#38bdf8", tension: 0.4 }] },
-    options: { scales: { y: { min: 0, max: 2 } } }
+    options: { scales: { y: { min: 0, max: 5 } } }
   });
 
   const cpuTimeChart = new Chart(document.getElementById("cpuTimeChart"), {
@@ -151,7 +171,7 @@
     data: {
       labels: ["User", "System", "Idle"],
       datasets: [{
-        data: [0, 0, 0],
+        data: [1, 1, 1],
         backgroundColor: ["#22c55e", "#38bdf8", "#64748b"]
       }]
     },
@@ -168,9 +188,9 @@
     const res = await fetch("/analyze");
     const d = await res.json();
 
-    const time = new Date().toLocaleTimeString();
-    labels.push(time);
-    cpuData.push(d.cpu.usage_percent);
+    const timeLabel = new Date().toLocaleTimeString("en-IN");
+    labels.push(timeLabel);
+    cpuData.push(Math.max(d.cpu.usage_percent, 0.1));
     memData.push(d.memory.used_percent);
 
     if (labels.length > 12) {
@@ -183,28 +203,43 @@
     memoryChart.update();
 
     cpuTimeChart.data.datasets[0].data = [
-      d.cpu.time_breakdown_seconds.user,
-      d.cpu.time_breakdown_seconds.system,
-      d.cpu.time_breakdown_seconds.idle
+      Math.max(d.cpu.time_breakdown_seconds.user, 0.1),
+      Math.max(d.cpu.time_breakdown_seconds.system, 0.1),
+      Math.max(d.cpu.time_breakdown_seconds.idle, 0.1)
     ];
     cpuTimeChart.update();
 
-    document.getElementById("health").innerText = d.health.status;
-    document.getElementById("health").className = "health " + d.health.status;
+    /* 🔹 Health */
+    const healthEl = document.getElementById("health");
+    const indicator = document.getElementById("indicator");
+
+    healthEl.innerText = d.health.status;
+    healthEl.className = "health " + d.health.status;
+    indicator.className = "indicator " + d.health.status;
+
     document.getElementById("healthScore").innerText = d.health.score;
-
     document.getElementById("uptime").innerText = d.meta.uptime_seconds + " sec";
-    document.getElementById("timestamp").innerText = d.meta.timestamp;
 
+    /* 🔹 UTC → IST */
+    const istTime = new Date(d.meta.timestamp).toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      hour12: true
+    });
+    document.getElementById("timestamp").innerText = istTime;
+
+    /* 🔹 Process */
     document.getElementById("pid").innerText = d.process.pid;
     document.getElementById("state").innerText = d.process.state;
     document.getElementById("threads").innerText = d.process.threads;
     document.getElementById("rss").innerText = d.process.memory.rss_kb + " KB";
 
+    /* 🔹 Memory */
     document.getElementById("memTotal").innerText = d.memory.human_readable.total_gb + " GB";
     document.getElementById("memUsed").innerText = d.memory.human_readable.used_gb + " GB";
-    document.getElementById("memCached").innerText = (d.memory.breakdown_kb.cached / 1024).toFixed(2) + " MB";
-    document.getElementById("memAvail").innerText = d.memory.human_readable.available_gb + " GB";
+    document.getElementById("memCached").innerText =
+      (d.memory.breakdown_kb.cached / 1024).toFixed(2) + " MB";
+    document.getElementById("memAvail").innerText =
+      d.memory.human_readable.available_gb + " GB";
   }
 
   refresh();

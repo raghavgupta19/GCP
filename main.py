@@ -199,23 +199,108 @@ def read_process_info():
 # -----------------------------------
 # Helper: HEALTH SCORE
 # -----------------------------------
-def calculate_health(cpu_percent, mem_percent):
-    score = int(100 - (cpu_percent * 0.6 + mem_percent * 0.4))
-    score = max(0, min(score, 100))
+def calculate_health(cpu, memory, process, uptime_seconds):
+    """
+    Multi-level health calculation with alert breakpoints
+    """
 
+    # -----------------------------
+    # Extract signals safely
+    # -----------------------------
+    process_cpu = cpu.get("usage_percent", 0.0)
+
+    total_mem_kb = memory.get("total_kb", 1)
+    process_rss_kb = process.get("memory", {}).get("rss_kb", 0)
+    process_mem_percent = round((process_rss_kb / total_mem_kb) * 100, 2)
+
+    system_mem_percent = memory.get("used_percent", 0.0)
+    threads = process.get("threads", 1)
+
+    cold_start = uptime_seconds < 30
+
+    # -----------------------------
+    # Base score
+    # -----------------------------
+    score = 100
+
+    score -= process_cpu * 0.4
+    score -= process_mem_percent * 0.3
+    score -= system_mem_percent * 0.2
+
+    if threads > 5:
+        score -= min((threads - 5) * 2, 12)
+
+    # Cold start soft protection
+    if cold_start:
+        score = max(score, 70)
+
+    score = int(max(0, min(score, 100)))
+
+    # -----------------------------
+    # Breakpoints
+    # -----------------------------
     if score > 80:
-        status = "Healthy"
-    elif score > 50:
-        status = "Warning"
+        state = "Healthy"
+        color = "green"
+        severity = "normal"
+    elif score > 70:
+        state = "Warning"
+        color = "yellow"
+        severity = "low"
+    elif score > 55:
+        state = "Degraded"
+        color = "orange"
+        severity = "medium"
+    elif score > 40:
+        state = "Alert"
+        color = "red"
+        severity = "high"
     else:
-        status = "Critical"
+        state = "Failure"
+        color = "red"
+        severity = "critical"
 
+    # -----------------------------
+    # Reason generator (UI gold ✨)
+    # -----------------------------
+    reasons = []
+    if process_cpu > 70:
+        reasons.append("High CPU usage")
+    if process_mem_percent > 60:
+        reasons.append("High process memory usage")
+    if system_mem_percent > 80:
+        reasons.append("System memory pressure")
+    if threads > 10:
+        reasons.append("High thread count")
+    if cold_start:
+        reasons.append("Cold start warming phase")
+
+    if not reasons:
+        reasons.append("Operating normally")
+
+    # -----------------------------
+    # Final object
+    # -----------------------------
     return {
         "score": score,
-        "status": status,
-        "calculation": {
-            "cpu_weight": 0.6,
-            "memory_weight": 0.4
+        "state": state,
+        "color": color,
+        "severity": severity,
+        "reasons": reasons,
+        "signals": {
+            "process_cpu_percent": process_cpu,
+            "process_memory_percent": process_mem_percent,
+            "system_memory_percent": system_mem_percent,
+            "threads": threads,
+            "uptime_seconds": uptime_seconds,
+            "cold_start": cold_start
+        },
+        "thresholds": {
+            "healthy": "> 80",
+            "warning": "71–80",
+            "degraded": "56–70",
+            "alert": "41–55",
+            "failure": "<= 40"
         }
     }
 
