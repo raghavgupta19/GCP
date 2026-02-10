@@ -1,59 +1,136 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory
 import time
 import os
 from datetime import datetime
-from flask import Flask, jsonify, send_from_directory
 
 app = Flask(__name__)
 
-# Container start time (resets on Cloud Run cold start)
+# -----------------------------------
+# Container start time (cold start)
+# -----------------------------------
 START_TIME = time.time()
 
+# -----------------------------------
+# Globals for CPU delta calculation
+# -----------------------------------
+LAST_CPU_TOTAL = None
+LAST_CPU_TIME = None
 
-# -----------------------------
-# Helper functions
-# -----------------------------
 
+# -----------------------------------
+# Helper: uptime
+# -----------------------------------
 def get_uptime_seconds():
-    """Uptime of this container instance (seconds)"""
     return round(time.time() - START_TIME, 2)
 
 
+# -----------------------------------
+# Helper: SYSTEM CPU (/proc/stat)
+# -----------------------------------
 def read_proc_stat():
     """
-    Read CPU stats from /proc/stat
-    CPU times are in USER JIFFIES -> converted to SECONDS
+    System-wide CPU stats from /proc/stat
+    Values are cumulative since boot (or container start)
     """
-    with open("/proc/stat") as f:
-        for line in f:
-            if line.startswith("cpu "):
-                parts = line.split()
-                user, nice, system, idle, iowait = map(int, parts[1:6])
+    try:
+        with open("/proc/stat") as f:
+            for line in f:
+                if line.startswith("cpu "):
+                    parts = line.split()
 
-                # Linux uses 100 jiffies/sec on most systems
-                JIFFIES_PER_SEC = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
+                    user = int(parts[1])
+                    nice = int(parts[2])
+                    system = int(parts[3])
+                    idle = int(parts[4])
+                    iowait = int(parts[5])
 
-                return {
-                    "usage_percent": round(
-                        100 * (user + system) / (user + system + idle + iowait), 2
-                    ),
-                    "cores_logical": os.cpu_count(),
-                    "time_breakdown_seconds": {
-                        "user": round(user / JIFFIES_PER_SEC, 2),
-                        "system": round(system / JIFFIES_PER_SEC, 2),
-                        "idle": round(idle / JIFFIES_PER_SEC, 2),
-                        "iowait": round(iowait / JIFFIES_PER_SEC, 2)
-                    },
-                    "unit": "seconds",
-                    "source": "/proc/stat"
-                }
+                    total = user + nice + system + idle + iowait
+                    clk = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
+
+                    # Prevent divide-by-zero
+                    usage = 0.0
+                    if total > 0:
+                        usage = (user + system) / total * 100
+
+                    # Visual floor so charts don’t look broken
+                    usage = round(max(usage, 0.1), 2)
+
+                    return {
+                        "cores_logical": os.cpu_count(),
+                        "usage_percent": usage,
+                        "time_breakdown_seconds": {
+                            "user": round(user / clk, 2),
+                            "system": round(system / clk, 2),
+                            "idle": round(idle / clk, 2),
+                            "iowait": round(iowait / clk, 2)
+                        },
+                        "unit": "seconds",
+                        "source": "/proc/stat"
+                    }
+
+    except Exception as e:
+        return {
+            "cores_logical": os.cpu_count(),
+            "usage_percent": 0.1,
+            "time_breakdown_seconds": {},
+            "unit": "seconds",
+            "source": "/proc/stat",
+            "error": str(e)
+        }
 
 
+# -----------------------------------
+# Helper: PROCESS CPU (delta-based)
+# -----------------------------------
+def read_process_cpu():
+    """
+    Process-level CPU usage using delta calculation.
+    This is the MOST reliable metric on Cloud Run.
+    """
+    global LAST_CPU_TOTAL, LAST_CPU_TIME
+
+    with open("/proc/self/stat") as f:
+        parts = f.read().split()
+
+    utime = int(parts[13])
+    stime = int(parts[14])
+    total_ticks = utime + stime
+
+    now = time.time()
+
+    # First request → seed values
+    if LAST_CPU_TOTAL is None:
+        LAST_CPU_TOTAL = total_ticks
+        LAST_CPU_TIME = now
+        return {
+            "process_usage_percent": 0.1,
+            "cpu_time_ticks": total_ticks,
+            "source": "/proc/self/stat"
+        }
+
+    tick_delta = total_ticks - LAST_CPU_TOTAL
+    time_delta = now - LAST_CPU_TIME
+
+    LAST_CPU_TOTAL = total_ticks
+    LAST_CPU_TIME = now
+
+    clk = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
+
+    cpu_percent = 0.0
+    if time_delta > 0:
+        cpu_percent = (tick_delta / clk) / time_delta * 100
+
+    return {
+        "process_usage_percent": round(max(cpu_percent, 0.1), 2),
+        "cpu_time_ticks": total_ticks,
+        "source": "/proc/self/stat"
+    }
+
+
+# -----------------------------------
+# Helper: MEMORY (/proc/meminfo)
+# -----------------------------------
 def read_meminfo():
-    """
-    Memory info from /proc/meminfo
-    All values are in KB
-    """
     mem = {}
     with open("/proc/meminfo") as f:
         for line in f:
@@ -85,19 +162,19 @@ def read_meminfo():
     }
 
 
+# -----------------------------------
+# Helper: PROCESS INFO
+# -----------------------------------
 def read_process_info():
-    """
-    Process info for THIS app container
-    """
     with open("/proc/self/stat") as f:
         parts = f.read().split()
 
     with open("/proc/self/status") as f:
-        status = f.read()
+        status_lines = f.read().splitlines()
 
     threads = 0
     state = "unknown"
-    for line in status.splitlines():
+    for line in status_lines:
         if line.startswith("Threads"):
             threads = int(line.split(":")[1].strip())
         if line.startswith("State"):
@@ -119,10 +196,10 @@ def read_process_info():
     }
 
 
+# -----------------------------------
+# Helper: HEALTH SCORE
+# -----------------------------------
 def calculate_health(cpu_percent, mem_percent):
-    """
-    Simple weighted health score
-    """
     score = int(100 - (cpu_percent * 0.6 + mem_percent * 0.4))
     score = max(0, min(score, 100))
 
@@ -143,13 +220,14 @@ def calculate_health(cpu_percent, mem_percent):
     }
 
 
-# -----------------------------
+# -----------------------------------
 # Routes
-# -----------------------------
-
+# -----------------------------------
 @app.route("/")
 def home():
     return "Hello from Cloud Run! System check complete."
+
+
 @app.route("/dashboard")
 def dashboard():
     return send_from_directory("static", "dashboard.html")
@@ -157,12 +235,13 @@ def dashboard():
 
 @app.route("/analyze")
 def analyze():
-    cpu = read_proc_stat()
+    system_cpu = read_proc_stat()
+    process_cpu = read_process_cpu()
     memory = read_meminfo()
     process = read_process_info()
 
     health = calculate_health(
-        cpu["usage_percent"],
+        process_cpu["process_usage_percent"],
         memory["used_percent"]
     )
 
@@ -171,18 +250,21 @@ def analyze():
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "uptime_seconds": get_uptime_seconds(),
             "container_scope": "cloud-run",
-            "note": "metrics reset on container cold start"
+            "note": "CPU values are delta-based to work on serverless"
         },
-        "cpu": cpu,
+        "cpu": {
+            **system_cpu,
+            **process_cpu
+        },
         "memory": memory,
         "process": process,
         "health": health
     })
 
 
-# -----------------------------
+# -----------------------------------
 # Local entry point
-# -----------------------------
+# -----------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
 

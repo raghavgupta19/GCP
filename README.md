@@ -138,7 +138,16 @@ Open:
 - http://127.0.0.1:8080/analyze
 
 ---
+---
 
+## Live Public URL
+
+
+Open:
+- https://raghav-gupta-16968455824.us-central1.run.app/dashboard
+- https://raghav-gupta-16968455824.us-central1.run.app/analyze
+
+---
 ## Build & Deploy
 
 ```bash
