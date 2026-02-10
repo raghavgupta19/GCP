@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>🚀 Cloud Run – System Monitoring Dashboard</title>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(circle at top, #020617, #020617 60%, #020617);
+      color: #e5e7eb;
+    }
+
+    header {
+      padding: 18px 24px;
+      background: linear-gradient(90deg, #020617, #020617);
+      font-size: 22px;
+      font-weight: 700;
+      border-bottom: 1px solid #1e293b;
+    }
+
+    .container {
+      padding: 24px;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 20px;
+    }
+
+    .card {
+      background: linear-gradient(145deg, #020617, #020617);
+      border-radius: 14px;
+      padding: 18px;
+      border: 1px solid #1e293b;
+      box-shadow: 0 0 0 1px rgba(30,41,59,0.4);
+    }
+
+    .card h3 {
+      margin: 0 0 12px;
+      font-size: 16px;
+      color: #38bdf8;
+      letter-spacing: 0.4px;
+    }
+
+    .metric {
+      display: flex;
+      justify-content: space-between;
+      font-size: 14px;
+      margin: 6px 0;
+    }
+
+    .value {
+      color: #f8fafc;
+      font-weight: 500;
+    }
+
+    .health {
+      font-size: 24px;
+      font-weight: 700;
+    }
+
+    .Healthy { color: #22c55e; }
+    .Warning { color: #facc15; }
+    .Critical { color: #ef4444; }
+
+    canvas {
+      max-height: 220px;
+    }
+
+    footer {
+      text-align: center;
+      padding: 14px;
+      font-size: 12px;
+      color: #64748b;
+    }
+  </style>
+</head>
+
+<body>
+<header>🚀 Cloud Run – System Monitoring Dashboard</header>
+
+<div class="container">
+
+  <!-- Health -->
+  <div class="card">
+    <h3>Health Status</h3>
+    <div id="health" class="health">Loading…</div>
+    <div class="metric"><span>Score</span><span id="healthScore" class="value">-</span></div>
+    <div class="metric"><span>Uptime</span><span id="uptime" class="value">-</span></div>
+    <div class="metric"><span>Timestamp</span><span id="timestamp" class="value">-</span></div>
+  </div>
+
+  <!-- Process -->
+  <div class="card">
+    <h3>Process Info</h3>
+    <div class="metric"><span>PID</span><span id="pid" class="value">-</span></div>
+    <div class="metric"><span>State</span><span id="state" class="value">-</span></div>
+    <div class="metric"><span>Threads</span><span id="threads" class="value">-</span></div>
+    <div class="metric"><span>RSS Memory</span><span id="rss" class="value">-</span></div>
+  </div>
+
+  <!-- CPU Percent (Zoomed) -->
+  <div class="card">
+    <h3>CPU Usage (%) – Zoomed</h3>
+    <canvas id="cpuChart"></canvas>
+  </div>
+
+  <!-- CPU Time Breakdown -->
+  <div class="card">
+    <h3>CPU Time Breakdown (seconds)</h3>
+    <canvas id="cpuTimeChart"></canvas>
+  </div>
+
+  <!-- Memory Chart -->
+  <div class="card">
+    <h3>Memory Usage (%)</h3>
+    <canvas id="memoryChart"></canvas>
+  </div>
+
+  <!-- Memory Details -->
+  <div class="card">
+    <h3>Memory Breakdown</h3>
+    <div class="metric"><span>Total</span><span id="memTotal" class="value">-</span></div>
+    <div class="metric"><span>Used</span><span id="memUsed" class="value">-</span></div>
+    <div class="metric"><span>Cached</span><span id="memCached" class="value">-</span></div>
+    <div class="metric"><span>Available</span><span id="memAvail" class="value">-</span></div>
+  </div>
+
+</div>
+
+<footer>
+  Auto-refresh every 5 seconds · Metrics from Linux kernel (/proc)
+</footer>
+
+<script>
+  const labels = [];
+  const cpuData = [];
+  const memData = [];
+
+  const cpuChart = new Chart(document.getElementById("cpuChart"), {
+    type: "line",
+    data: { labels, datasets: [{ label: "CPU %", data: cpuData, borderColor: "#38bdf8", tension: 0.4 }] },
+    options: { scales: { y: { min: 0, max: 2 } } }
+  });
+
+  const cpuTimeChart = new Chart(document.getElementById("cpuTimeChart"), {
+    type: "bar",
+    data: {
+      labels: ["User", "System", "Idle"],
+      datasets: [{
+        data: [0, 0, 0],
+        backgroundColor: ["#22c55e", "#38bdf8", "#64748b"]
+      }]
+    },
+    options: { plugins: { legend: { display: false } } }
+  });
+
+  const memoryChart = new Chart(document.getElementById("memoryChart"), {
+    type: "bar",
+    data: { labels, datasets: [{ label: "Memory %", data: memData, backgroundColor: "#22c55e" }] },
+    options: { scales: { y: { min: 0, max: 100 } } }
+  });
+
+  async function refresh() {
+    const res = await fetch("/analyze");
+    const d = await res.json();
+
+    const time = new Date().toLocaleTimeString();
+    labels.push(time);
+    cpuData.push(d.cpu.usage_percent);
+    memData.push(d.memory.used_percent);
+
+    if (labels.length > 12) {
+      labels.shift();
+      cpuData.shift();
+      memData.shift();
+    }
+
+    cpuChart.update();
+    memoryChart.update();
+
+    cpuTimeChart.data.datasets[0].data = [
+      d.cpu.time_breakdown_seconds.user,
+      d.cpu.time_breakdown_seconds.system,
+      d.cpu.time_breakdown_seconds.idle
+    ];
+    cpuTimeChart.update();
+
+    document.getElementById("health").innerText = d.health.status;
+    document.getElementById("health").className = "health " + d.health.status;
+    document.getElementById("healthScore").innerText = d.health.score;
+
+    document.getElementById("uptime").innerText = d.meta.uptime_seconds + " sec";
+    document.getElementById("timestamp").innerText = d.meta.timestamp;
+
+    document.getElementById("pid").innerText = d.process.pid;
+    document.getElementById("state").innerText = d.process.state;
+    document.getElementById("threads").innerText = d.process.threads;
+    document.getElementById("rss").innerText = d.process.memory.rss_kb + " KB";
+
+    document.getElementById("memTotal").innerText = d.memory.human_readable.total_gb + " GB";
+    document.getElementById("memUsed").innerText = d.memory.human_readable.used_gb + " GB";
+    document.getElementById("memCached").innerText = (d.memory.breakdown_kb.cached / 1024).toFixed(2) + " MB";
+    document.getElementById("memAvail").innerText = d.memory.human_readable.available_gb + " GB";
+  }
+
+  refresh();
+  setInterval(refresh, 5000);
+</script>
+
+</body>
+</html>
+

@@ -1,197 +1,164 @@
-# Cloud Run Practical Assignment
 
-**Objective:**
-Demonstrate proficiency in Linux shell scripting, containerization, and deploying a serverless application to **Google Cloud Run**.
+# Cloud Run Advanced System Metrics Dashboard
 
----
-
-## Project Structure
-
-```
-deploy_app/
-│
-├─ sys_check.sh          # Linux system check script
-├─ main.py               # Flask web application
-├─ requirements.txt      # Python dependencies
-├─ Dockerfile            # Container definition
-└─ .dockerignore         # Files/folders to ignore in Docker build
-```
+## Overview
+This project demonstrates a production-grade system observability service deployed on **Google Cloud Run**.
+It exposes detailed CPU, memory, and process-level metrics from inside a running container and presents them
+both as structured JSON and a clean web dashboard UI.
 
 ---
 
-## Task 1: Linux & Shell Scripting
+## Live Endpoints
 
-**sys_check.sh** script does the following:
+| Endpoint | Description |
+|--------|------------|
+| `/` | Health greeting |
+| `/analyze` | JSON metrics API |
+| `/dashboard` | Visual system dashboard |
 
-1. Outputs current date/time, disk usage, and logged-in user to `log.txt`.
-2. Checks if a directory `deploy_app` exists; if not, creates it.
-3. Moves `log.txt` into `deploy_app`.
+---
 
-**Commands to run script:**
+## Sample JSON Output (`/analyze`)
+
+```json
+{
+  "cpu": {
+    "cores_logical": 12,
+    "source": "/proc/stat",
+    "time_breakdown_seconds": {
+      "idle": 160406.03,
+      "iowait": 0,
+      "system": 33.54,
+      "user": 111.77
+    },
+    "unit": "seconds",
+    "usage_percent": 0.09
+  },
+  "memory": {
+    "available_kb": 5407208,
+    "breakdown_kb": {
+      "buffers": 0,
+      "cached": 1147196,
+      "swap_total": 0,
+      "swap_used": 0
+    },
+    "human_readable": {
+      "available_gb": 5.16,
+      "total_gb": 6.32,
+      "used_gb": 1.16
+    },
+    "source": "/proc/meminfo",
+    "total_kb": 6623156,
+    "unit": "kilobytes",
+    "used_kb": 1215948,
+    "used_percent": 18.36
+  },
+  "process": {
+    "cpu_time_ticks": 11,
+    "memory": {
+      "rss_kb": 31104,
+      "virtual_kb": 187236
+    },
+    "pid": 2795,
+    "source": [
+      "/proc/self/stat",
+      "/proc/self/status"
+    ],
+    "state": "S (sleeping)",
+    "threads": 3
+  },
+  "health": {
+    "calculation": {
+      "cpu_weight": 0.6,
+      "memory_weight": 0.4
+    },
+    "score": 92,
+    "status": "Healthy"
+  },
+  "meta": {
+    "container_scope": "cloud-run",
+    "note": "metrics reset on container cold start",
+    "timestamp": "2026-02-10T09:13:30.680047Z",
+    "uptime_seconds": 11.51
+  }
+}
+```
+
+---
+
+## JSON Field Explanation
+
+### CPU
+- `cores_logical`: Logical CPU cores available to the container
+- `usage_percent`: Active CPU utilization
+- `time_breakdown_seconds`: Kernel-level CPU time distribution
+- `source`: Linux kernel interface used
+
+### Memory
+- `total_kb`, `used_kb`, `available_kb`: RAM statistics
+- `breakdown_kb`: Cached, buffer, and swap details
+- `human_readable`: UI-friendly memory values
+- `source`: Kernel memory interface
+
+### Process
+- `pid`: Application process ID
+- `state`: Process state (running/sleeping)
+- `threads`: Active threads
+- `rss_kb`: Real memory used
+- `virtual_kb`: Virtual memory allocated
+
+### Health
+- `score`: Calculated health score (0–100)
+- `status`: Human-readable health
+- `calculation`: Weights used for scoring
+
+### Meta
+- `timestamp`: UTC time of metric capture
+- `uptime_seconds`: Container uptime
+- `container_scope`: Execution environment
+- `note`: Cloud Run cold-start clarification
+
+---
+
+## Dashboard Preview
+
+![Dashboard Screenshot](dashboard_screenshot.png)
+
+---
+
+## Run Locally
 
 ```bash
-cd ~/deploy_app
-chmod +x sys_check.sh        # Make script executable
-./sys_check.sh                # Run script
-cat deploy_app/log.txt        # Check the log file
+source venv/bin/activate
+python main.py
 ```
+
+Open:
+- http://127.0.0.1:8080/dashboard
+- http://127.0.0.1:8080/analyze
 
 ---
 
-## Task 2: Python Flask Application
-
-* **main.py**: Basic Flask app that returns:
-
-```
-Hello from Cloud Run! System check complete.
-```
-
-* **requirements.txt**:
-
-```
-Flask==3.1.2
-gunicorn==25.0.3
-blinker==1.9.0
-click==8.3.1
-itsdangerous==2.2.0
-Jinja2==3.1.6
-MarkupSafe==3.0.3
-packaging==26.0
-Werkzeug==3.1.5
-```
-
-**Test Flask app locally:**
+## Build & Deploy
 
 ```bash
-source venv/bin/activate            # Activate virtual environment
-export FLASK_APP=main.py
-flask run --host=0.0.0.0 --port=8080
+gcloud builds submit --tag gcr.io/PROJECT-ID/hello-cloud-run
 ```
-
-* Open `http://127.0.0.1:8080` in browser to verify.
-
----
-
-## Task 3: Containerization (Docker)
-
-**Dockerfile example:**
-
-```dockerfile
-FROM python:3.11-slim
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-EXPOSE 8080
-
-CMD ["gunicorn", "-b", ":8080", "main:app"]
-```
-
-**Build Docker image locally:**
-
-```bash
-docker build -t hello-cloud-run .
-```
-
-**Test Docker container locally:**
-
-```bash
-docker run -p 8080:8080 hello-cloud-run
-```
-
-* Open `http://localhost:8080` to verify.
-
----
-
-## Task 4: Deploy to Google Cloud Run
-
-### Step 1: Authenticate & Configure GCloud
-
-```bash
-gcloud auth login                           # Login to your Google account
-gcloud config set project [PROJECT-ID]      # Set your Google Cloud project
-gcloud auth configure-docker               # Authenticate Docker with GCP
-```
-
-> Replace `[PROJECT-ID]` with your project ID (no brackets).
-
----
-
-### Step 2: Build & Push Docker Image to GCR
-
-```bash
-gcloud builds submit --tag gcr.io/[PROJECT-ID]/hello-cloud-run
-```
-
-* Cloud Build will build and push your Docker image to **Google Container Registry**.
-
----
-
-### Step 3: Deploy to Cloud Run
 
 ```bash
 gcloud run deploy hello-cloud-run \
-  --image gcr.io/[PROJECT-ID]/hello-cloud-run \
-  --platform managed \
+  --image gcr.io/PROJECT-ID/hello-cloud-run \
   --region us-central1 \
   --allow-unauthenticated
 ```
 
-* After deployment, you will get a **Service URL**, e.g.:
-
-```
-https://hello-cloud-run-16968455824.us-central1.run.app
-```
-
-* Open the URL in a browser or test with:
-
-```bash
-curl https://hello-cloud-run-16968455824.us-central1.run.app
-```
-
-* It should return: `Hello from Cloud Run! System check complete.`
-
 ---
 
-* Open the Live URL in a browser for a demo:
-
-```
-https://raghav-gupta-16968455824.us-central1.run.app
-```
-
-* You should see: `Hello from Cloud Run! System check complete.`
+## Key Highlights
+- Kernel-level metrics via `/proc`
+- Nested, UI-ready JSON
+- Cloud Run–aware uptime model
+- No unnecessary or misleading data
+- Designed for dashboards, alerts, and extensions
 
 ---
-## Task 5: Extended Flask Endpoint (/analyze)
-
-The `/analyze` endpoint returns dynamic system metrics as JSON:
-
-**Example JSON response:**
-```json
-{
-  "timestamp": "2026-02-09T05:30:12Z",
-  "uptime_seconds": 3600,
-  "cpu_metric": 23.5,
-  "memory_metric": 512,
-  "health_score": 85,
-  "message": "All systems normal"
-}
-```
-## Testing
-
-1. Run Flask app locally to verify endpoints.
-2. Build Docker image and test container locally.
-3. Deploy to Cloud Run.
-4. Verify `/` and `/analyze` endpoints using curl or browser.
-
-## Deliverables
-
-1. `sys_check.sh` — Linux system check script
-2. `main.py` — Flask web app
-3. `requirements.txt` — Python dependencies
-4. `Dockerfile` — Container definition
-5. **Service URL** — Cloud Run live link

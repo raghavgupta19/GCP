@@ -1,149 +1,188 @@
-from flask import Flask, jsonify,render_template
+from flask import Flask, jsonify
 import time
+import os
 from datetime import datetime
+from flask import Flask, jsonify, send_from_directory
 
 app = Flask(__name__)
 
-# Container start time (resets on cold start)
-APP_START_TIME = time.time()
-
-# Store previous CPU values to calculate delta
-PREV_CPU_TOTAL = None
-PREV_CPU_IDLE = None
+# Container start time (resets on Cloud Run cold start)
+START_TIME = time.time()
 
 
-# ---------- Helper functions ----------
+# -----------------------------
+# Helper functions
+# -----------------------------
 
-def read_cpu_stats():
+def get_uptime_seconds():
+    """Uptime of this container instance (seconds)"""
+    return round(time.time() - START_TIME, 2)
+
+
+def read_proc_stat():
     """
     Read CPU stats from /proc/stat
-    Returns total_time, idle_time
+    CPU times are in USER JIFFIES -> converted to SECONDS
     """
-    with open("/proc/stat", "r") as f:
-        cpu_line = f.readline().strip().split()
+    with open("/proc/stat") as f:
+        for line in f:
+            if line.startswith("cpu "):
+                parts = line.split()
+                user, nice, system, idle, iowait = map(int, parts[1:6])
 
-    values = list(map(int, cpu_line[1:]))
+                # Linux uses 100 jiffies/sec on most systems
+                JIFFIES_PER_SEC = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
 
-    idle_time = values[3] + values[4]   # idle + iowait
-    total_time = sum(values)
+                return {
+                    "usage_percent": round(
+                        100 * (user + system) / (user + system + idle + iowait), 2
+                    ),
+                    "cores_logical": os.cpu_count(),
+                    "time_breakdown_seconds": {
+                        "user": round(user / JIFFIES_PER_SEC, 2),
+                        "system": round(system / JIFFIES_PER_SEC, 2),
+                        "idle": round(idle / JIFFIES_PER_SEC, 2),
+                        "iowait": round(iowait / JIFFIES_PER_SEC, 2)
+                    },
+                    "unit": "seconds",
+                    "source": "/proc/stat"
+                }
 
-    return total_time, idle_time
 
-
-def get_cpu_usage():
+def read_meminfo():
     """
-    Calculate CPU usage percentage using delta method
+    Memory info from /proc/meminfo
+    All values are in KB
     """
-    global PREV_CPU_TOTAL, PREV_CPU_IDLE
-
-    total, idle = read_cpu_stats()
-
-    if PREV_CPU_TOTAL is None:
-        PREV_CPU_TOTAL = total
-        PREV_CPU_IDLE = idle
-        return 0.0
-
-    total_delta = total - PREV_CPU_TOTAL
-    idle_delta = idle - PREV_CPU_IDLE
-
-    PREV_CPU_TOTAL = total
-    PREV_CPU_IDLE = idle
-
-    if total_delta == 0:
-        return 0.0
-
-    usage = 100 * (1 - idle_delta / total_delta)
-    return round(usage, 2)
-
-
-def get_memory_info():
-    """
-    Read memory details from /proc/meminfo
-    """
-    meminfo = {}
-
-    with open("/proc/meminfo", "r") as f:
+    mem = {}
+    with open("/proc/meminfo") as f:
         for line in f:
             key, value = line.split(":")
-            meminfo[key.strip()] = int(value.strip().split()[0])
+            mem[key] = int(value.strip().split()[0])
 
-    total = meminfo["MemTotal"]
-    available = meminfo["MemAvailable"]
+    total = mem["MemTotal"]
+    available = mem["MemAvailable"]
     used = total - available
 
     return {
         "total_kb": total,
         "used_kb": used,
         "available_kb": available,
-        "used_percent": round((used / total) * 100, 2)
+        "used_percent": round((used / total) * 100, 2),
+        "breakdown_kb": {
+            "buffers": mem.get("Buffers", 0),
+            "cached": mem.get("Cached", 0),
+            "swap_total": mem.get("SwapTotal", 0),
+            "swap_used": mem.get("SwapTotal", 0) - mem.get("SwapFree", 0)
+        },
+        "human_readable": {
+            "total_gb": round(total / 1024 / 1024, 2),
+            "used_gb": round(used / 1024 / 1024, 2),
+            "available_gb": round(available / 1024 / 1024, 2)
+        },
+        "unit": "kilobytes",
+        "source": "/proc/meminfo"
     }
 
 
-def get_process_info():
+def read_process_info():
     """
-    Get current process stats from /proc/self/stat
+    Process info for THIS app container
     """
-    with open("/proc/self/stat", "r") as f:
-        data = f.read().split()
+    with open("/proc/self/stat") as f:
+        parts = f.read().split()
+
+    with open("/proc/self/status") as f:
+        status = f.read()
+
+    threads = 0
+    state = "unknown"
+    for line in status.splitlines():
+        if line.startswith("Threads"):
+            threads = int(line.split(":")[1].strip())
+        if line.startswith("State"):
+            state = line.split(":")[1].strip()
 
     return {
-        "pid": int(data[0]),
-        "cpu_time_ticks": int(data[13]) + int(data[14]),
-        "memory_pages": int(data[23])
+        "pid": os.getpid(),
+        "state": state,
+        "cpu_time_ticks": int(parts[13]) + int(parts[14]),
+        "memory": {
+            "virtual_kb": int(parts[22]) // 1024,
+            "rss_kb": int(parts[23]) * 4
+        },
+        "threads": threads,
+        "source": [
+            "/proc/self/stat",
+            "/proc/self/status"
+        ]
     }
 
 
-# ---------- Routes ----------
-@app.route("/ui")
-def ui():
-    return render_template("dashboard.html")
+def calculate_health(cpu_percent, mem_percent):
+    """
+    Simple weighted health score
+    """
+    score = int(100 - (cpu_percent * 0.6 + mem_percent * 0.4))
+    score = max(0, min(score, 100))
+
+    if score > 80:
+        status = "Healthy"
+    elif score > 50:
+        status = "Warning"
+    else:
+        status = "Critical"
+
+    return {
+        "score": score,
+        "status": status,
+        "calculation": {
+            "cpu_weight": 0.6,
+            "memory_weight": 0.4
+        }
+    }
+
+
+# -----------------------------
+# Routes
+# -----------------------------
+
 @app.route("/")
 def home():
     return "Hello from Cloud Run! System check complete."
+@app.route("/dashboard")
+def dashboard():
+    return send_from_directory("static", "dashboard.html")
 
 
 @app.route("/analyze")
 def analyze():
-    timestamp = datetime.utcnow().isoformat() + "Z"
-    uptime_seconds = round(time.time() - APP_START_TIME, 2)
+    cpu = read_proc_stat()
+    memory = read_meminfo()
+    process = read_process_info()
 
-    cpu_usage = get_cpu_usage()
-    memory = get_memory_info()
-    process = get_process_info()
-
-    # Health score (simple & explainable)
-    health_score = int(100 - (cpu_usage * 0.6 + memory["used_percent"] * 0.4))
-    health_score = max(0, min(health_score, 100))
-
-    if health_score >= 80:
-        message = "Healthy"
-    elif health_score >= 50:
-        message = "Degraded"
-    else:
-        message = "Critical"
+    health = calculate_health(
+        cpu["usage_percent"],
+        memory["used_percent"]
+    )
 
     return jsonify({
         "meta": {
-            "timestamp": timestamp,
-            "uptime_seconds": uptime_seconds
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "uptime_seconds": get_uptime_seconds(),
+            "container_scope": "cloud-run",
+            "note": "metrics reset on container cold start"
         },
-        "cpu": {
-            "usage_percent": cpu_usage,
-            "source": "/proc/stat"
-        },
-        "memory": {
-            "source": "/proc/meminfo",
-            **memory
-        },
-        "process": {
-            "source": "/proc/self/stat",
-            **process
-        },
-        "health": {
-            "score": health_score,
-            "status": message
-        }
+        "cpu": cpu,
+        "memory": memory,
+        "process": process,
+        "health": health
     })
+
+
+# -----------------------------
+# Local entry point
+# -----------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
 
