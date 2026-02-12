@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>🚀 Cloud Run – System Monitoring Dashboard</title>
+  <title> Cloud Run – System Monitoring Dashboard</title>
 
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -91,11 +91,14 @@
       font-size: 12px;
       color: #64748b;
     }
+    .Degraded { color: #fb923c; }
+.Failure  { color: #ef4444; }
+
   </style>
 </head>
 
 <body>
-<header>🚀 Cloud Run – System Monitoring Dashboard</header>
+<header> Cloud Run – System Monitoring Dashboard</header>
 
 <div class="container">
 
@@ -213,9 +216,9 @@
     const healthEl = document.getElementById("health");
     const indicator = document.getElementById("indicator");
 
-    healthEl.innerText = d.health.status;
-    healthEl.className = "health " + d.health.status;
-    indicator.className = "indicator " + d.health.status;
+     healthEl.innerText = d.health.state;
+     healthEl.className = "health " + d.health.state;
+     indicator.className = "indicator " + d.health.state;
 
     document.getElementById("healthScore").innerText = d.health.score;
     document.getElementById("uptime").innerText = d.meta.uptime_seconds + " sec";
